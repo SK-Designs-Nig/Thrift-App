@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Thrift Fund Tracker</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --line:#2a2f3a; --accent:#22c55e;
+    --accent2:#3b82f6; --muted:#8b93a5; --text:#e9ecf1; --warn:#f59e0b;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); padding:20px;
+  }
+  h1{font-size:20px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:18px;}
+  .summary{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+    gap:10px; margin-bottom:22px;
+  }
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px;}
+  .stat .label{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em;}
+  .stat .value{font-size:20px; font-weight:700; margin-top:4px;}
+  .overall-bar{height:10px; background:#23262f; border-radius:6px; overflow:hidden; margin-top:18px;}
+  .overall-fill{height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); width:0%; transition:width .3s;}
+  table{width:100%; border-collapse:separate; border-spacing:6px; margin-top:18px;}
+  th{font-size:11px; color:var(--muted); font-weight:600; padding:4px; text-align:center;}
+  th.name-col, td.name-col{text-align:left; padding-left:8px; font-size:13px;}
+  td.name-col{font-weight:600; white-space:nowrap;}
+  .box{
+    width:38px; height:38px; border-radius:8px; border:1px solid var(--line);
+    background:#1d212b; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    font-size:13px; color:var(--muted); user-select:none; transition:all .15s;
+  }
+  .box:hover{border-color:var(--accent2);}
+  .box.paid{background:rgba(34,197,94,.18); border-color:var(--accent); color:var(--accent); font-weight:700;}
+  .row-progress{font-size:11px; color:var(--muted); padding-left:8px;}
+  .month-progress-row td{padding-top:2px; font-size:10px; color:var(--muted); text-align:center;}
+  .month-bar{height:5px; background:#23262f; border-radius:3px; overflow:hidden; width:34px; margin:2px auto 0;}
+  .month-bar-fill{height:100%; background:var(--accent2);}
+  .legend{font-size:11px; color:var(--muted); margin-top:14px;}
+  .reset{
+    margin-top:18px; background:none; border:1px solid var(--line); color:var(--muted);
+    padding:8px 14px; border-radius:8px; font-size:12px; cursor:pointer;
+  }
+  .reset:hover{border-color:#ef4444; color:#ef4444;}
+  .scroll-wrap{overflow-x:auto; padding-bottom:8px;}
+</style>
+</head>
+<body>
+
+<h1>🤝 Thrift Fund Tracker</h1>
+<div class="sub">9 contributors (10th slot pending) · ₦1,000,000 each / month · June 2026 → March 2027 (10 cycles)</div>
+
+<div class="summary">
+  <div class="stat"><div class="label">Total Expected</div><div class="value" id="statTotal">₦100,000,000</div></div>
+  <div class="stat"><div class="label">Total Collected</div><div class="value" id="statCollected">₦0</div></div>
+  <div class="stat"><div class="label">Outstanding</div><div class="value" id="statOutstanding">₦100,000,000</div></div>
+  <div class="stat"><div class="label">Completion</div><div class="value" id="statPercent">0%</div></div>
+</div>
+<div class="overall-bar"><div class="overall-fill" id="overallFill"></div></div>
+
+<div class="scroll-wrap">
+<table id="grid"></table>
+</div>
+
+<div class="legend">Tap any box to mark a person's payment as Paid / Unpaid for that month. Numbers in green = ₦1M paid.</div>
+<button class="reset" onclick="resetAll()">Reset all</button>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ===== FILL THESE IN FROM YOUR SUPABASE PROJECT SETTINGS =====
+const SUPABASE_URL = "https://dyqbpmswlpwrikaqqywv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5cWJwbXN3bHB3cmlrYXFxeXd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MjYzNzEsImV4cCI6MjA5ODQwMjM3MX0.mZdmsz4b3cbF4B6VrBQJ3cmrtMXXyQDyU1uDJaFOb8Y";
+// ================================================================
+
+const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const people = ["Mr Tayo","Mr Toba","Mr Yomi","Mrs Theresa","Mr Wale","Mr Kenneth","Mr Joshua","Mr Tom","Mr Jimmy"];
+const months = ["Jun 26","Jul 26","Aug 26","Sep 26","Oct 26","Nov 26","Dec 26","Jan 27","Feb 27","Mar 27"];
+const AMOUNT = 1000000;
+
+// state[personIndex][monthIndex] = true/false  (loaded from Supabase)
+let state = people.map(()=>months.map(()=>false));
+
+async function loadState(){
+  const { data, error } = await supa.from('thrift_payments').select('person, month_index, paid');
+  if (error) {
+    console.error(error);
+    document.querySelector('.legend').innerHTML =
+      '⚠️ Could not load saved data from Supabase (' + error.message + '). Showing blank tracker — taps may not save.';
+    return;
+  }
+  data.forEach(row=>{
+    const pi = people.indexOf(row.person);
+    if (pi !== -1 && row.month_index >= 0 && row.month_index < months.length){
+      state[pi][row.month_index] = row.paid;
+    }
+  });
+  render();
+}
+
+async function savePayment(personName, monthIndex, paid){
+  const { error } = await supa.from('thrift_payments').upsert({
+    person: personName,
+    month_index: monthIndex,
+    paid: paid,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'person,month_index' });
+  if (error) console.error('Save failed:', error);
+}
+
+function fmt(n){ return "₦" + n.toLocaleString("en-NG"); }
+
+function render(){
+  const table = document.getElementById('grid');
+  table.innerHTML = "";
+
+  // header row
+  let thead = document.createElement('tr');
+  thead.innerHTML = `<th class="name-col">Member</th>` + months.map(m=>`<th>${m}</th>`).join('') + `<th>Total</th>`;
+  table.appendChild(thead);
+
+  people.forEach((p, pi)=>{
+    let tr = document.createElement('tr');
+    let paidCount = state[pi].filter(Boolean).length;
+    let cells = months.map((m, mi)=>{
+      let paid = state[pi][mi];
+      return `<td><div class="box ${paid?'paid':''}" onclick="toggle(${pi},${mi})">${paid?'✓':''}</div></td>`;
+    }).join('');
+    tr.innerHTML = `<td class="name-col">${p}</td>${cells}<td class="row-progress">${paidCount}/10<br>${fmt(paidCount*AMOUNT)}</td>`;
+    table.appendChild(tr);
+  });
+
+  // per-month progress row
+  let progRow = document.createElement('tr');
+  progRow.className = 'month-progress-row';
+  let monthCells = months.map((m, mi)=>{
+    let count = state.reduce((acc,row)=>acc+(row[mi]?1:0),0);
+    let pct = Math.round(count/10*100);
+    return `<td>${count}/10<div class="month-bar"><div class="month-bar-fill" style="width:${pct}%"></div></div></td>`;
+  }).join('');
+  progRow.innerHTML = `<td class="name-col" style="font-size:11px;color:var(--muted)">Month total</td>${monthCells}<td></td>`;
+  table.appendChild(progRow);
+
+  updateStats();
+}
+
+function toggle(pi, mi){
+  state[pi][mi] = !state[pi][mi];
+  render();
+  savePayment(people[pi], mi, state[pi][mi]);
+}
+
+function updateStats(){
+  let totalCells = people.length * months.length;
+  let paidCells = state.reduce((acc,row)=>acc + row.filter(Boolean).length, 0);
+  let collected = paidCells * AMOUNT;
+  let total = totalCells * AMOUNT;
+  let pct = Math.round((paidCells/totalCells)*100);
+
+  document.getElementById('statTotal').textContent = fmt(total);
+  document.getElementById('statCollected').textContent = fmt(collected);
+  document.getElementById('statOutstanding').textContent = fmt(total - collected);
+  document.getElementById('statPercent').textContent = pct + '%';
+  document.getElementById('overallFill').style.width = pct + '%';
+}
+
+async function resetAll(){
+  if(confirm('Reset all payment records? This clears it for everyone.')){
+    const { error } = await supa.from('thrift_payments').update({ paid:false }).neq('person','');
+    if (error) { console.error(error); alert('Reset failed — check console.'); return; }
+    state = people.map(()=>months.map(()=>false));
+    render();
+  }
+}
+
+render();
+loadState();
+</script>
+</body>
+</html>
